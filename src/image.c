@@ -236,7 +236,7 @@ image **load_alphabet()
     return alphabets;
 }
 
-void draw_detections(image im, detection *dets, int num, float thresh, char **names, image **alphabet, int classes)
+image draw_detections(image im, detection *dets, int num, float thresh, char **names, image **alphabet, int classes)
 {
     int i,j;
 
@@ -307,6 +307,7 @@ void draw_detections(image im, detection *dets, int num, float thresh, char **na
             }
         }
     }
+    return im;
 }
 
 void transpose_image(image im)

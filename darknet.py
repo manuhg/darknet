@@ -1,6 +1,9 @@
 from ctypes import *
 import math
 import random
+import os
+import sys
+
 
 def sample(probs):
     s = sum(probs)
@@ -12,16 +15,19 @@ def sample(probs):
             return i
     return len(probs)-1
 
+
 def c_array(ctype, values):
     arr = (ctype*len(values))()
     arr[:] = values
     return arr
+
 
 class BOX(Structure):
     _fields_ = [("x", c_float),
                 ("y", c_float),
                 ("w", c_float),
                 ("h", c_float)]
+
 
 class DETECTION(Structure):
     _fields_ = [("bbox", BOX),
@@ -38,18 +44,29 @@ class IMAGE(Structure):
                 ("c", c_int),
                 ("data", POINTER(c_float))]
 
+
 class METADATA(Structure):
     _fields_ = [("classes", c_int),
                 ("names", POINTER(c_char_p))]
 
-    
 
-#lib = CDLL("/home/pjreddie/documents/darknet/libdarknet.so", RTLD_GLOBAL)
-lib = CDLL("libdarknet.so", RTLD_GLOBAL)
+lib = CDLL("./libdarknet.so", RTLD_GLOBAL)
 lib.network_width.argtypes = [c_void_p]
 lib.network_width.restype = c_int
 lib.network_height.argtypes = [c_void_p]
 lib.network_height.restype = c_int
+
+#load_alphabet,draw_detections,save_image,    letterbox_image
+load_alphabet = lib.load_alphabet
+load_alphabet.argtypes = []
+load_alphabet.restype = POINTER(POINTER(IMAGE))
+
+draw_detections = lib.draw_detections
+draw_detections.argtypes = [IMAGE,POINTER(DETECTION),c_int,c_float,POINTER(c_char_p),POINTER(POINTER(IMAGE)),c_int ]
+draw_detections.restype = IMAGE
+
+save_image = lib.save_image
+save_image.argtypes = [IMAGE,c_char_p]
 
 predict = lib.network_predict
 predict.argtypes = [c_void_p, POINTER(c_float)]
@@ -63,7 +80,8 @@ make_image.argtypes = [c_int, c_int, c_int]
 make_image.restype = IMAGE
 
 get_network_boxes = lib.get_network_boxes
-get_network_boxes.argtypes = [c_void_p, c_int, c_int, c_float, c_float, POINTER(c_int), c_int, POINTER(c_int)]
+get_network_boxes.argtypes = [c_void_p, c_int, c_int,
+                              c_float, c_float, POINTER(c_int), c_int, POINTER(c_int)]
 get_network_boxes.restype = POINTER(DETECTION)
 
 make_network_boxes = lib.make_network_boxes
@@ -114,6 +132,7 @@ predict_image = lib.network_predict_image
 predict_image.argtypes = [c_void_p, IMAGE]
 predict_image.restype = POINTER(c_float)
 
+
 def classify(net, meta, im):
     out = predict_image(net, im)
     res = []
@@ -122,35 +141,50 @@ def classify(net, meta, im):
     res = sorted(res, key=lambda x: -x[1])
     return res
 
-def detect(net, meta, image, thresh=.5, hier_thresh=.5, nms=.45):
+
+def detect(net, meta, image, thresh=.5, hier_thresh=.5, nms=.45,):
     im = load_image(image, 0, 0)
     num = c_int(0)
     pnum = pointer(num)
     predict_image(net, im)
-    dets = get_network_boxes(net, im.w, im.h, thresh, hier_thresh, None, 0, pnum)
+    dets = get_network_boxes(net, im.w, im.h, thresh,
+                             hier_thresh, None, 0, pnum)
     num = pnum[0]
-    if (nms): do_nms_obj(dets, num, meta.classes, nms);
+    if (nms):
+        do_nms_obj(dets, num, meta.classes, nms)
 
+    im = draw_detections(im, dets, num, thresh, meta.names, load_alphabet(),meta.classes)
+    save_image(im,'predictions')
     res = []
     for j in range(num):
         for i in range(meta.classes):
             if dets[j].prob[i] > 0:
                 b = dets[j].bbox
-                res.append((meta.names[i], dets[j].prob[i], (b.x, b.y, b.w, b.h)))
+                res.append(
+                    (meta.names[i], dets[j].prob[i], (b.x, b.y, b.w, b.h)))
     res = sorted(res, key=lambda x: -x[1])
+    
     free_image(im)
     free_detections(dets, num)
     return res
-    
-if __name__ == "__main__":
-    #net = load_net("cfg/densenet201.cfg", "/home/pjreddie/trained/densenet201.weights", 0)
-    #im = load_image("data/wolf.jpg", 0, 0)
-    #meta = load_meta("cfg/imagenet1k.data")
-    #r = classify(net, meta, im)
-    #print r[:10]
-    net = load_net("cfg/tiny-yolo.cfg", "tiny-yolo.weights", 0)
-    meta = load_meta("cfg/coco.data")
-    r = detect(net, meta, "data/dog.jpg")
-    print r
-    
 
+
+weights_base_url = 'https://pjreddie.com/media/files/'
+cfg_base_url = 'https://raw.githubusercontent.com/pjreddie/darknet/master/'
+models_lst = ['yolov2', 'yolo2-tiny', 'yolov3', 'yolov3-tiny']
+models = {}
+for model_name in models_lst:
+    models.update({model_name: {'name': model_name, 'cfg': 'cfg/'+model_name+'.cfg', 'weights': model_name +'.weights'}})
+
+if __name__ == "__main__":
+    model_name = 'yolov2'
+    input_file = 'data/dog.jpg'
+    if len(sys.argv)>1:
+        model_name = sys.argv[1]
+        if len(sys.argv)>2:
+            input_file = sys.argv[-1]
+    model = models[model_name]    
+    net = load_net(model['cfg'], model['weights'], 0)
+    meta = load_meta("cfg/coco.data")
+    r = detect(net, meta, input_file)
+    print(r)
