@@ -3,7 +3,10 @@ import math
 import random
 import os
 import sys
-
+import pickle as pkl
+import cv2
+import numpy as np
+import random
 
 def sample(probs):
     s = sum(probs)
@@ -62,7 +65,7 @@ load_alphabet.argtypes = []
 load_alphabet.restype = POINTER(POINTER(IMAGE))
 
 draw_detections = lib.draw_detections
-draw_detections.argtypes = [IMAGE,POINTER(DETECTION),c_int,c_float,POINTER(c_char_p),POINTER(POINTER(IMAGE)),c_int ]
+draw_detections.argtypes = [IMAGE,POINTER(DETECTION),c_int,c_float,POINTER(c_char_p),POINTER(POINTER(IMAGE)),c_int]
 draw_detections.restype = IMAGE
 
 save_image = lib.save_image
@@ -141,20 +144,40 @@ def classify(net, meta, im):
     res = sorted(res, key=lambda x: -x[1])
     return res
 
+def box_and_label(result, img):
+    coords = list(map(lambda v:int(v),list(result[2])))
+    c1 = tuple(coords[:2])
+    c2 = tuple(coords[2:])
+    print(result,c1,c2)
+    
+    label = result[0] +' - '+str(np.around(float(result[1]),decimals=2))
+    color = random.choice(colors)
+    cv2.rectangle(img, c1, c2,color, 1)
+    t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 1 , 1)[0]
+    c2 = c1[0] + t_size[0] + 3, c1[1] + t_size[1] + 4
+    cv2.rectangle(img, c1, c2,color, -1)
+    cv2.putText(img, label, (c1[0], c1[1] + t_size[1] + 4), cv2.FONT_HERSHEY_PLAIN, 1, [225,255,255], 1)
+    return img
+                                        
 
-def detect(net, meta, image, thresh=.5, hier_thresh=.5, nms=.45,):
+
+def detect(net, meta, image,output_file, thresh=.5, hier_thresh=.5, nms=.45,):
+    h = lib.network_height(net)
+    w = lib.network_width(net)
+    
     im = load_image(image, 0, 0)
+    im_sized = letterbox_image(im,h,w)
     num = c_int(0)
     pnum = pointer(num)
-    predict_image(net, im)
+    predict_image(net, im_sized)
     dets = get_network_boxes(net, im.w, im.h, thresh,
                              hier_thresh, None, 0, pnum)
     num = pnum[0]
     if (nms):
-        do_nms_obj(dets, num, meta.classes, nms)
+        do_nms_sort(dets, num, meta.classes, nms)
 
-    im = draw_detections(im, dets, num, thresh, meta.names, load_alphabet(),meta.classes)
-    save_image(im,'predictions')
+    
+    #save_image(im,'predictions')
     res = []
     for j in range(num):
         for i in range(meta.classes):
@@ -163,11 +186,16 @@ def detect(net, meta, image, thresh=.5, hier_thresh=.5, nms=.45,):
                 res.append(
                     (meta.names[i], dets[j].prob[i], (b.x, b.y, b.w, b.h)))
     res = sorted(res, key=lambda x: -x[1])
-    
+    #draw_detections(im, dets, num, thresh, meta.names, load_alphabet(),meta.classes)
+    map(lambda result:box_and_label(result,im),res)
+    cv2.imsave(im,output_file)
     free_image(im)
     free_detections(dets, num)
     return res
 
+os.system('wget -nc https://raw.githubusercontent.com/ayooshkathuria/pytorch-yolo-v3/master/pallete')
+colors = pkl.load(open("pallete", "rb"))
+#colors = [(39, 129, 113), (164, 80, 133), (83, 122, 114), (99, 81, 172), (95, 56, 104), (37, 84, 86), (14, 89, 122), (80, 7, 65), (10, 102, 25),(90, 185, 109), (106, 110, 132), (169, 158, 85), (188, 185, 26), (103, 1, 17), (82, 144, 81), (92, 7, 184), (49, 81, 155), (179, 177, 69), (93, 187, 158), (13, 39, 73), (12, 50, 60), (16, 179, 33), (112, 69, 165), (15, 139, 63), (33, 191, 159), (182, 173, 32), (34, 113, 133), (90, 135, 34), (53, 34, 86), (141, 35, 190), (6, 171, 8), (118, 76, 112), (89, 60, 55), (15, 54, 88), (112, 75, 181), (42, 147, 38), (138, 52, 63), (128, 65, 149), (106, 103, 24), (168, 33, 45), (28, 136, 135), (86, 91, 108), (52, 11, 76), (142, 6, 189), (57, 81, 168), (55, 19, 148), (182, 101, 89), (44, 65, 179), (1, 33, 26), (122, 164, 26), (70, 63, 134), (137, 106, 82), (120, 118, 52), (129, 74, 42), (182, 147, 112), (22, 157, 50), (56, 50, 20), (2, 22, 177), (156, 100, 106), (21, 35, 42), (13, 8, 121), (142, 92, 28), (45, 118, 33), (105, 118, 30), (7, 185, 124), (46, 34, 146), (105, 184, 169), (22, 18, 5), (147, 71, 73), (181, 64, 91), (31, 39, 184), (164, 179, 33), (96, 50, 18), (95, 15, 106), (113, 68, 54), (136, 116, 112), (119, 139, 130), (31, 139, 34), (66, 6, 127), (62, 39, 2), (49, 99, 180), (49, 119, 155), (153, 50, 183), (125, 38, 3), (129, 87, 143), (49, 87, 40), (128, 62, 120), (73, 85, 148), (28, 144, 118), (29, 9, 24), (175, 45, 108), (81, 175, 64), (178, 19, 157), (74, 188, 190), (18, 114, 2), (62, 128, 96), (21, 3, 150), (0, 6, 95), (2, 20, 184), (122, 37, 185)]
 
 weights_base_url = 'https://pjreddie.com/media/files/'
 cfg_base_url = 'https://raw.githubusercontent.com/pjreddie/darknet/master/'
@@ -183,8 +211,8 @@ if __name__ == "__main__":
         model_name = sys.argv[1]
         if len(sys.argv)>2:
             input_file = sys.argv[-1]
-    model = models[model_name]    
+    model = models[model_name]
     net = load_net(model['cfg'], model['weights'], 0)
     meta = load_meta("cfg/coco.data")
-    r = detect(net, meta, input_file)
+    r = detect(net, meta, input_file,'predictionse.jpg')
     print(r)

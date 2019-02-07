@@ -37,6 +37,31 @@ double demo_time;
 
 detection *get_network_boxes(network *net, int w, int h, float thresh, float hier, int *map, int relative, int *num);
 
+
+void run_prediction_on_img(network *net,char **names,image **alphabet, image im, float thresh, float hier_thresh, char *outfile)
+{
+  set_batch_network(net, 1);
+  srand(2222222);
+  double time;
+  float nms=.45;
+
+  image sized = letterbox_image(im, net->w, net->h);
+  layer l = net->layers[net->n-1];
+
+  float *X = sized.data;
+  time=what_time_is_it_now();
+  network_predict(net, X);
+  //printf("%s: Predicted in %f seconds.\n", input, what_time_is_it_now()-time);
+  int nboxes = 0;
+  detection *dets = get_network_boxes(net, im.w, im.h, thresh, hier_thresh, 0, 1, &nboxes);
+  if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
+  draw_detections(im, dets, nboxes, thresh, names, alphabet, l.classes);
+  free_detections(dets, nboxes);
+  save_image(im, outfile);
+  free_image(im);
+  free_image(sized);
+  }
+
 int size_network(network *net)
 {
     int i;
