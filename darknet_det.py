@@ -4,9 +4,11 @@ import random
 import os
 import sys
 import pickle as pkl
+import cv
 import cv2
 import numpy as np
 import random
+
 
 def sample(probs):
     s = sum(probs)
@@ -53,6 +55,51 @@ class METADATA(Structure):
                 ("names", POINTER(c_char_p))]
 
 
+class IplROI(Structure):
+    pass
+
+
+class IplTileInfo(Structure):
+    pass
+
+
+class IplImage(Structure):
+    pass
+
+
+IplImage._fields_ = [
+    ('nSize', c_int),
+    ('ID', c_int),
+    ('nChannels', c_int),
+    ('alphaChannel', c_int),
+    ('depth', c_int),
+    ('colorModel', c_char * 4),
+    ('channelSeq', c_char * 4),
+    ('dataOrder', c_int),
+    ('origin', c_int),
+    ('align', c_int),
+    ('width', c_int),
+    ('height', c_int),
+    ('roi', POINTER(IplROI)),
+    ('maskROI', POINTER(IplImage)),
+    ('imageId', c_void_p),
+    ('tileInfo', POINTER(IplTileInfo)),
+    ('imageSize', c_int),
+    ('imageData', c_char_p),
+    ('widthStep', c_int),
+    ('BorderMode', c_int * 4),
+    ('BorderConst', c_int * 4),
+    ('imageDataOrigin', c_char_p)]
+
+
+class iplimage_t(Structure):
+    _fields_ = [('ob_refcnt', c_ssize_t),
+                ('ob_type',  py_object),
+                ('a', POINTER(IplImage)),
+                ('data', py_object),
+                ('offset', c_size_t)]
+
+
 lib = CDLL("./libdarknet.so", RTLD_GLOBAL)
 lib.network_width.argtypes = [c_void_p]
 lib.network_width.restype = c_int
@@ -65,11 +112,12 @@ load_alphabet.argtypes = []
 load_alphabet.restype = POINTER(POINTER(IMAGE))
 
 draw_detections = lib.draw_detections
-draw_detections.argtypes = [IMAGE,POINTER(DETECTION),c_int,c_float,POINTER(c_char_p),POINTER(POINTER(IMAGE)),c_int]
+draw_detections.argtypes = [IMAGE, POINTER(DETECTION), c_int, c_float, POINTER(
+    c_char_p), POINTER(POINTER(IMAGE)), c_int]
 draw_detections.restype = IMAGE
 
 save_image = lib.save_image
-save_image.argtypes = [IMAGE,c_char_p]
+save_image.argtypes = [IMAGE, c_char_p]
 
 predict = lib.network_predict
 predict.argtypes = [c_void_p, POINTER(c_float)]
@@ -120,6 +168,14 @@ letterbox_image = lib.letterbox_image
 letterbox_image.argtypes = [IMAGE, c_int, c_int]
 letterbox_image.restype = IMAGE
 
+mat_to_image = lib.mat_to_image
+mat_to_image.argtypes = [np.ndarray]
+mat_to_image.restype = IMAGE
+
+image_to_mat = lib.image_to_mat
+image_to_mat.argtypes = [IMAGE]
+image_to_mat.restype = [np.ndarray]
+
 load_meta = lib.get_metadata
 lib.get_metadata.argtypes = [c_char_p]
 lib.get_metadata.restype = METADATA
@@ -144,29 +200,30 @@ def classify(net, meta, im):
     res = sorted(res, key=lambda x: -x[1])
     return res
 
+
 def box_and_label(result, img):
-    coords = list(map(lambda v:int(v),list(result[2])))
+    coords = list(map(lambda v: int(v), list(result[2])))
     c1 = tuple(coords[:2])
     c2 = tuple(coords[2:])
-    print(result,c1,c2)
-    
-    label = result[0] +' - '+str(np.around(float(result[1]),decimals=2))
+    print(result, c1, c2)
+
+    label = result[0] + ' - '+str(np.around(float(result[1]), decimals=2))
     color = random.choice(colors)
-    cv2.rectangle(img, c1, c2,color, 1)
-    t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 1 , 1)[0]
+    cv2.rectangle(img, c1, c2, color, 1)
+    t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 1, 1)[0]
     c2 = c1[0] + t_size[0] + 3, c1[1] + t_size[1] + 4
-    cv2.rectangle(img, c1, c2,color, -1)
-    cv2.putText(img, label, (c1[0], c1[1] + t_size[1] + 4), cv2.FONT_HERSHEY_PLAIN, 1, [225,255,255], 1)
+    cv2.rectangle(img, c1, c2, color, -1)
+    cv2.putText(img, label, (c1[0], c1[1] + t_size[1] + 4),
+                cv2.FONT_HERSHEY_PLAIN, 1, [225, 255, 255], 1)
     return img
-                                        
 
 
-def detect(net, meta, image,output_file, thresh=.5, hier_thresh=.5, nms=.45,):
+def detect(net, meta, image, output_file, thresh=.5, hier_thresh=.5, nms=.45,):
     h = lib.network_height(net)
     w = lib.network_width(net)
-    
+
     im = load_image(image, 0, 0)
-    im_sized = letterbox_image(im,h,w)
+    im_sized = letterbox_image(im, h, w)
     num = c_int(0)
     pnum = pointer(num)
     predict_image(net, im_sized)
@@ -176,8 +233,7 @@ def detect(net, meta, image,output_file, thresh=.5, hier_thresh=.5, nms=.45,):
     if (nms):
         do_nms_sort(dets, num, meta.classes, nms)
 
-    
-    #save_image(im,'predictions')
+    # save_image(im,'predictions')
     res = []
     for j in range(num):
         for i in range(meta.classes):
@@ -187,11 +243,12 @@ def detect(net, meta, image,output_file, thresh=.5, hier_thresh=.5, nms=.45,):
                     (meta.names[i], dets[j].prob[i], (b.x, b.y, b.w, b.h)))
     res = sorted(res, key=lambda x: -x[1])
     #draw_detections(im, dets, num, thresh, meta.names, load_alphabet(),meta.classes)
-    map(lambda result:box_and_label(result,im),res)
-    cv2.imsave(im,output_file)
+    map(lambda result: box_and_label(result, im), res)
+    cv2.imsave(im, output_file)
     free_image(im)
     free_detections(dets, num)
     return res
+
 
 os.system('wget -nc https://raw.githubusercontent.com/ayooshkathuria/pytorch-yolo-v3/master/pallete')
 colors = pkl.load(open("pallete", "rb"))
@@ -202,17 +259,26 @@ cfg_base_url = 'https://raw.githubusercontent.com/pjreddie/darknet/master/'
 models_lst = ['yolov2', 'yolo2-tiny', 'yolov3', 'yolov3-tiny']
 models = {}
 for model_name in models_lst:
-    models.update({model_name: {'name': model_name, 'cfg': 'cfg/'+model_name+'.cfg', 'weights': model_name +'.weights'}})
+    models.update({model_name: {'name': model_name, 'cfg': 'cfg/' +
+                                model_name+'.cfg', 'weights': model_name + '.weights'}})
 
 if __name__ == "__main__":
     model_name = 'yolov2'
     input_file = 'data/dog.jpg'
-    if len(sys.argv)>1:
+    if len(sys.argv) > 1:
         model_name = sys.argv[1]
-        if len(sys.argv)>2:
+        if len(sys.argv) > 2:
             input_file = sys.argv[-1]
     model = models[model_name]
     net = load_net(model['cfg'], model['weights'], 0)
     meta = load_meta("cfg/coco.data")
-    r = detect(net, meta, input_file,'predictionse.jpg')
+    r = detect(net, meta, input_file, 'predictionse.jpg')
+
+    # data = cv2.imread('lena.jpg')  # 512 x 512
+    # step = data.dtype.itemsize * 3 * data.shape[1]
+    # size = data.shape[1], data.shape[0]
+    # img = cv.CreateImageHeader(size, cv.IPL_DEPTH_8U, 3)
+    # cv.SetData(img, data, step)
+    # ipl = iplimage_t.from_address(id(img))
+
     print(r)
