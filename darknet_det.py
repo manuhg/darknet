@@ -4,7 +4,6 @@ import random
 import os
 import sys
 import pickle as pkl
-import cv
 import cv2
 import numpy as np
 import random
@@ -169,12 +168,12 @@ letterbox_image.argtypes = [IMAGE, c_int, c_int]
 letterbox_image.restype = IMAGE
 
 mat_to_image = lib.mat_to_image
-mat_to_image.argtypes = [np.ndarray]
+mat_to_image.argtypes = [IplImage]
 mat_to_image.restype = IMAGE
 
 image_to_mat = lib.image_to_mat
 image_to_mat.argtypes = [IMAGE]
-image_to_mat.restype = [np.ndarray]
+image_to_mat.restype = IplImage
 
 load_meta = lib.get_metadata
 lib.get_metadata.argtypes = [c_char_p]
