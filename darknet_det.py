@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import random
 
-
+env_dir='env_YOLO/'
 def sample(probs):
     s = sum(probs)
     probs = [a/s for a in probs]
@@ -19,6 +19,12 @@ def sample(probs):
             return i
     return len(probs)-1
 
+def exec_cmd(cmd_str,echo=True):
+    print(os.popen(cmd_str).read() if echo else '')
+    
+def prepare():
+        exec_cmd('git clone https://github.com/manuhg/darknet '+env_dir)
+        exec_cmd('cd '+env_dir+' && make -j8 && cp libdarknet* ../')
 
 def c_array(ctype, values):
     arr = (ctype*len(values))()
@@ -53,53 +59,21 @@ class METADATA(Structure):
     _fields_ = [("classes", c_int),
                 ("names", POINTER(c_char_p))]
 
+    
+prepared = False
+if not prepared:
+  prepare()
 
-class IplROI(Structure):
-    pass
-
-
-class IplTileInfo(Structure):
-    pass
-
-
-class IplImage(Structure):
-    pass
-
-
-IplImage._fields_ = [
-    ('nSize', c_int),
-    ('ID', c_int),
-    ('nChannels', c_int),
-    ('alphaChannel', c_int),
-    ('depth', c_int),
-    ('colorModel', c_char * 4),
-    ('channelSeq', c_char * 4),
-    ('dataOrder', c_int),
-    ('origin', c_int),
-    ('align', c_int),
-    ('width', c_int),
-    ('height', c_int),
-    ('roi', POINTER(IplROI)),
-    ('maskROI', POINTER(IplImage)),
-    ('imageId', c_void_p),
-    ('tileInfo', POINTER(IplTileInfo)),
-    ('imageSize', c_int),
-    ('imageData', c_char_p),
-    ('widthStep', c_int),
-    ('BorderMode', c_int * 4),
-    ('BorderConst', c_int * 4),
-    ('imageDataOrigin', c_char_p)]
+try:
+  global lib
+  lib = CDLL(env_dir+"libdarknet.so", RTLD_GLOBAL)
+except Exception as e:
+  prepare()
+  lib = CDLL(env_dir+"libdarknet.so", RTLD_GLOBAL)
 
 
-class iplimage_t(Structure):
-    _fields_ = [('ob_refcnt', c_ssize_t),
-                ('ob_type',  py_object),
-                ('a', POINTER(IplImage)),
-                ('data', py_object),
-                ('offset', c_size_t)]
 
 
-lib = CDLL("./libdarknet.so", RTLD_GLOBAL)
 lib.network_width.argtypes = [c_void_p]
 lib.network_width.restype = c_int
 lib.network_height.argtypes = [c_void_p]
@@ -167,14 +141,6 @@ letterbox_image = lib.letterbox_image
 letterbox_image.argtypes = [IMAGE, c_int, c_int]
 letterbox_image.restype = IMAGE
 
-mat_to_image = lib.mat_to_image
-mat_to_image.argtypes = [IplImage]
-mat_to_image.restype = IMAGE
-
-image_to_mat = lib.image_to_mat
-image_to_mat.argtypes = [IMAGE]
-image_to_mat.restype = IplImage
-
 load_meta = lib.get_metadata
 lib.get_metadata.argtypes = [c_char_p]
 lib.get_metadata.restype = METADATA
@@ -199,40 +165,62 @@ def classify(net, meta, im):
     res = sorted(res, key=lambda x: -x[1])
     return res
 
+def array_to_image(arr):
+    arr = arr.transpose(2,0,1)
+    c = arr.shape[0]
+    h = arr.shape[1]
+    w = arr.shape[2]
+    arr = (arr/255.0).flatten()
+    data = c_array(c_float, arr)
+    im = IMAGE(w,h,c,data)
+    return im
 
-def box_and_label(result, img):
+def preprocess_cv_img(cvimg):
+    cvimg = array_to_image(cvimg)
+    rgbgr_image(cvimg)
+    return cvimg
+  
+  
+def box_and_label(result, img,colors):
     coords = list(map(lambda v: int(v), list(result[2])))
-    c1 = tuple(coords[:2])
-    c2 = tuple(coords[2:])
-    print(result, c1, c2)
-
+    x,y,w,h = coords #x and y of centre / anchor point
+    
+    pt1 = x-(w/2),y+(h/2) #left top corner (xmin,ymax)
+    pt2 = x+(w/2),y-(h/2) #right bottom cornet
+    
     label = result[0] + ' - '+str(np.around(float(result[1]), decimals=2))
     color = random.choice(colors)
-    cv2.rectangle(img, c1, c2, color, 1)
+    cv2.rectangle(img, pt1, pt2, color, 1)
     t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 1, 1)[0]
-    c2 = c1[0] + t_size[0] + 3, c1[1] + t_size[1] + 4
-    cv2.rectangle(img, c1, c2, color, -1)
-    cv2.putText(img, label, (c1[0], c1[1] + t_size[1] + 4),
+    pt2 = pt1[0] + t_size[0] + 3, pt1[1] + t_size[1] + 4
+    cv2.rectangle(img, pt1, pt2, color, -1)
+    cv2.putText(img, label, (pt1[0], pt1[1] + t_size[1] + 4),
                 cv2.FONT_HERSHEY_PLAIN, 1, [225, 255, 255], 1)
     return img
 
 
-def detect(net, meta, image, output_file, thresh=.5, hier_thresh=.5, nms=.45,):
+def detect(net, meta, image, output_file='predictions.jpg', thresh=.5, hier_thresh=.5, nms=.45,visualize=False):
     h = lib.network_height(net)
     w = lib.network_width(net)
-
-    im = load_image(image, 0, 0)
-    im_sized = letterbox_image(im, h, w)
+    if type(image)==str:
+      image=cv2.imread(image)
+      #im = load_image(image, 0, 0)
+    #else:
+    
+    im = preprocess_cv_img(image)
+    #im_sized = letterbox_image(im, h, w)
+    im_sized=im
+    
     num = c_int(0)
     pnum = pointer(num)
     predict_image(net, im_sized)
     dets = get_network_boxes(net, im.w, im.h, thresh,
                              hier_thresh, None, 0, pnum)
     num = pnum[0]
-    if (nms):
-        do_nms_sort(dets, num, meta.classes, nms)
 
-    # save_image(im,'predictions')
+    if (nms):
+        do_nms_obj(dets, num, meta.classes, nms)
+
     res = []
     for j in range(num):
         for i in range(meta.classes):
@@ -241,43 +229,39 @@ def detect(net, meta, image, output_file, thresh=.5, hier_thresh=.5, nms=.45,):
                 res.append(
                     (meta.names[i], dets[j].prob[i], (b.x, b.y, b.w, b.h)))
     res = sorted(res, key=lambda x: -x[1])
-    #draw_detections(im, dets, num, thresh, meta.names, load_alphabet(),meta.classes)
-    map(lambda result: box_and_label(result, im), res)
-    cv2.imsave(im, output_file)
+    if visualize:
+        for r in res:
+            image=box_and_label(r,image,colors)
+    cv2.imwrite(output_file,image)
     free_image(im)
     free_detections(dets, num)
     return res
 
 
-os.system('wget -nc https://raw.githubusercontent.com/ayooshkathuria/pytorch-yolo-v3/master/pallete')
-colors = pkl.load(open("pallete", "rb"))
-#colors = [(39, 129, 113), (164, 80, 133), (83, 122, 114), (99, 81, 172), (95, 56, 104), (37, 84, 86), (14, 89, 122), (80, 7, 65), (10, 102, 25),(90, 185, 109), (106, 110, 132), (169, 158, 85), (188, 185, 26), (103, 1, 17), (82, 144, 81), (92, 7, 184), (49, 81, 155), (179, 177, 69), (93, 187, 158), (13, 39, 73), (12, 50, 60), (16, 179, 33), (112, 69, 165), (15, 139, 63), (33, 191, 159), (182, 173, 32), (34, 113, 133), (90, 135, 34), (53, 34, 86), (141, 35, 190), (6, 171, 8), (118, 76, 112), (89, 60, 55), (15, 54, 88), (112, 75, 181), (42, 147, 38), (138, 52, 63), (128, 65, 149), (106, 103, 24), (168, 33, 45), (28, 136, 135), (86, 91, 108), (52, 11, 76), (142, 6, 189), (57, 81, 168), (55, 19, 148), (182, 101, 89), (44, 65, 179), (1, 33, 26), (122, 164, 26), (70, 63, 134), (137, 106, 82), (120, 118, 52), (129, 74, 42), (182, 147, 112), (22, 157, 50), (56, 50, 20), (2, 22, 177), (156, 100, 106), (21, 35, 42), (13, 8, 121), (142, 92, 28), (45, 118, 33), (105, 118, 30), (7, 185, 124), (46, 34, 146), (105, 184, 169), (22, 18, 5), (147, 71, 73), (181, 64, 91), (31, 39, 184), (164, 179, 33), (96, 50, 18), (95, 15, 106), (113, 68, 54), (136, 116, 112), (119, 139, 130), (31, 139, 34), (66, 6, 127), (62, 39, 2), (49, 99, 180), (49, 119, 155), (153, 50, 183), (125, 38, 3), (129, 87, 143), (49, 87, 40), (128, 62, 120), (73, 85, 148), (28, 144, 118), (29, 9, 24), (175, 45, 108), (81, 175, 64), (178, 19, 157), (74, 188, 190), (18, 114, 2), (62, 128, 96), (21, 3, 150), (0, 6, 95), (2, 20, 184), (122, 37, 185)]
+colors = [(39, 129, 113), (164, 80, 133), (83, 122, 114), (99, 81, 172), (95, 56, 104), (37, 84, 86), (14, 89, 122), (80, 7, 65), (10, 102, 25),(90, 185, 109), (106, 110, 132), (169, 158, 85), (188, 185, 26), (103, 1, 17), (82, 144, 81), (92, 7, 184), (49, 81, 155), (179, 177, 69), (93, 187, 158), (13, 39, 73), (12, 50, 60), (16, 179, 33), (112, 69, 165), (15, 139, 63), (33, 191, 159), (182, 173, 32), (34, 113, 133), (90, 135, 34), (53, 34, 86), (141, 35, 190), (6, 171, 8), (118, 76, 112), (89, 60, 55), (15, 54, 88), (112, 75, 181), (42, 147, 38), (138, 52, 63), (128, 65, 149), (106, 103, 24), (168, 33, 45), (28, 136, 135), (86, 91, 108), (52, 11, 76), (142, 6, 189), (57, 81, 168), (55, 19, 148), (182, 101, 89), (44, 65, 179), (1, 33, 26), (122, 164, 26), (70, 63, 134), (137, 106, 82), (120, 118, 52), (129, 74, 42), (182, 147, 112), (22, 157, 50), (56, 50, 20), (2, 22, 177), (156, 100, 106), (21, 35, 42), (13, 8, 121), (142, 92, 28), (45, 118, 33), (105, 118, 30), (7, 185, 124), (46, 34, 146), (105, 184, 169), (22, 18, 5), (147, 71, 73), (181, 64, 91), (31, 39, 184), (164, 179, 33), (96, 50, 18), (95, 15, 106), (113, 68, 54), (136, 116, 112), (119, 139, 130), (31, 139, 34), (66, 6, 127), (62, 39, 2), (49, 99, 180), (49, 119, 155), (153, 50, 183), (125, 38, 3), (129, 87, 143), (49, 87, 40), (128, 62, 120), (73, 85, 148), (28, 144, 118), (29, 9, 24), (175, 45, 108), (81, 175, 64), (178, 19, 157), (74, 188, 190), (18, 114, 2), (62, 128, 96), (21, 3, 150), (0, 6, 95), (2, 20, 184), (122, 37, 185)]
 
-weights_base_url = 'https://pjreddie.com/media/files/'
-cfg_base_url = 'https://raw.githubusercontent.com/pjreddie/darknet/master/'
-models_lst = ['yolov2', 'yolo2-tiny', 'yolov3', 'yolov3-tiny']
-models = {}
-for model_name in models_lst:
-    models.update({model_name: {'name': model_name, 'cfg': 'cfg/' +
-                                model_name+'.cfg', 'weights': model_name + '.weights'}})
-
-if __name__ == "__main__":
-    model_name = 'yolov2'
-    input_file = 'data/dog.jpg'
-    if len(sys.argv) > 1:
-        model_name = sys.argv[1]
-        if len(sys.argv) > 2:
-            input_file = sys.argv[-1]
-    model = models[model_name]
-    net = load_net(model['cfg'], model['weights'], 0)
-    meta = load_meta("cfg/coco.data")
-    r = detect(net, meta, input_file, 'predictionse.jpg')
-
-    # data = cv2.imread('lena.jpg')  # 512 x 512
-    # step = data.dtype.itemsize * 3 * data.shape[1]
-    # size = data.shape[1], data.shape[0]
-    # img = cv.CreateImageHeader(size, cv.IPL_DEPTH_8U, 3)
-    # cv.SetData(img, data, step)
-    # ipl = iplimage_t.from_address(id(img))
-
-    print(r)
+class yolo():
+    def __init__(self,model_name='yolov2'):
+        self.weights_base_url = 'https://pjreddie.com/media/files/'
+        self.cfg_base_url = 'https://raw.githubusercontent.com/pjreddie/darknet/master/'
+        self.models_lst = ['yolov2', 'yolov2-tiny', 'yolov3', 'yolov3-tiny']
+        self.models = {}
+        for model_name_ in self.models_lst:
+            self.models.update({model_name_: {'name': model_name_, 'cfg': env_dir+'cfg/' +model_name_+'.cfg', 'weights': env_dir+model_name_ + '.weights'}})
+        self.model_name = model_name
+        self.model = self.models[self.model_name]
+        #if not os.path.isfile(self.model['weights']):
+         #   exec_cmd('wget -nc https://pjreddie.com/media/files/'+self.model_name+'.weights -o '+env_dir+self.model_name+'.weights')
+    def load(self):
+      try:
+        print('Loading net..',self.model['cfg'], self.model['weights'])
+        self.net = load_net(self.model['cfg'], self.model['weights'], 0)
+        print('Loading metadata')
+        self.meta = load_meta(env_dir+"cfg/coco.data")
+      except Exception as e:
+        print('Error loading network',e)
+    def detect(self,image,opfile):
+        return detect(self.net, self.meta, image, opfile)
+    # def prepare(self):
+    #     exec_cmd('git clone https://github.com/manuhg/darknet dkn')
+    #     exec_cmd('cd dkn && make -j8 && cp libdarknet* ../')
